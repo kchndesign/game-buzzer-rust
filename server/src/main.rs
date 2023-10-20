@@ -6,21 +6,14 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use warp::filters::ws::Message;
 use warp::{Filter, filters::ws::WebSocket};
 use futures_util::{SinkExt, StreamExt};
+mod game;
+use crate::game::Game;
+mod protocol;
 
 #[tokio::main]
 async fn main() {
     // establish in memory state
-    
-    let buzzer_activated = RwLock::new(false);
-    let user_activated = Option::from(None);
-    let teams= RwLock::new(HashMap::new());
-
-    let state: Arc<State> = Arc::new(State {
-        buzzer_activated,
-        user_activated,
-        teams
-    });
-
+    let game = Arc::new(RwLock::new(Game::new()));
 
     // Lay out routes, middleware and actions for each route
     let routes = warp::path("echo")
@@ -30,7 +23,7 @@ async fn main() {
         // Init a new closure with the upgrade object that 
         // is spit out by the ws() filter
         .map(move | upgrade: warp::ws::Ws | {
-            let cloned_state = state.clone();
+            let cloned_state = game.clone();
             upgrade.on_upgrade(| websocket| on_upgrade(websocket, cloned_state))
         });
 
@@ -38,7 +31,7 @@ async fn main() {
 }
 
 // handle new connections
-async fn on_upgrade(websocket: WebSocket, state: Arc<State>) {
+async fn on_upgrade(websocket: WebSocket, state: Arc<RwLock<Game>>) {
     let (mut ws_send, mut ws_receive) = websocket.split();
 
     // create channel for this user
@@ -77,63 +70,70 @@ async fn on_upgrade(websocket: WebSocket, state: Arc<State>) {
 
         // register new user to team
         "register" => {
-            let user = sections[1];
-            let team = sections[2];
-            // // wait for the lock to clear on the all users vector before inserting
-            // state.all_users.write().await
-            //     .insert(user.to_string(), &channel_send);
+            let team = sections[1];
+            let user = sections[2];
             
-            let mut teams = state.teams.write().await;
-            let maybe_team = teams.get_mut(team);
-
-            match maybe_team {
-                Some(value) => {
-                    value.insert(user.to_string(), channel_send);
-                },
-                None => {
-                    let mut new_team = HashMap::new();
-                    new_team.insert(user.to_string(), channel_send);
-                    state.teams.write().await.insert(team.to_string(), new_team);
-                }
-            }
+            state.write().await.register_user_for_team(team, user, channel_send).await;
         },
         &_ => {}
     };
 
 
 
-    // while there are some websocket messages to receive from this user, handle them
-    while let Some(message) = ws_receive.next().await {
-        let msg = message.unwrap();
+    tokio::task::spawn(async move {
+        // while there are some websocket messages to receive from this user, handle them
+        while let Some(message) = ws_receive.next().await {
+            let msg = message.unwrap();
 
-        // all messages should be text
-        assert!(msg.is_text());
+            // all messages should be text
+            assert!(msg.is_text());
 
-        // get the text for the message
-        let text = msg.to_str().unwrap();
-        let sections: Vec<&str> = text.split(".").collect();
+            // get the text for the message
+            let text = msg.to_str().unwrap();
+            let sections: Vec<&str> = text.split(".").collect();
 
-        if sections.len() != 5 {
-            println!("Received message with wrong number of sections (should be 5) {}", text);
-            continue;
+            if sections.len() != 5 {
+                println!("Received message with wrong number of sections (should be 5) {}", text);
+                continue;
+            }
+
+            // the first section describes the type of the message
+            match sections[0] {
+
+                // register new user to team
+                "message" => {
+                    // let target_team = sections[1];
+                    // let message = sections[2];
+
+                    // let teams = state.teams.read().await;
+                    // let maybe_team = teams.get(target_team);
+
+                    // match maybe_team {
+                    //     Some(value) => {
+                    //         println!("Sending message to team {}", target_team);
+                    //         for recipient in value {
+                    //             let send_item = Message::text(message);
+                    //             let send_result = recipient.1.send(send_item);
+                    //             send_result.unwrap();
+                    //         }
+                    //     },
+                    //     None => {
+                    //         println!("Attempted to send message to team that does not exist {}", target_team);
+                    //     }
+                    // }
+                },
+                &_ => {}
+            }
         }
-
-        // the first section describes the type of the message
-        match sections[0] {
-
-            // register new user to team
-            "register" => {
-                
-            },
-            &_ => {}
-        }
-
-        // let _ = ws_send.send(message.unwrap()).await;
-    }
+    });
 }
 
 pub struct State {
     pub buzzer_activated: RwLock<bool>,
     pub user_activated: Option<String>,
     pub teams: RwLock<HashMap<String, HashMap<String, mpsc::UnboundedSender<Message>>>>
+}
+
+pub struct Registration {
+    
 }
