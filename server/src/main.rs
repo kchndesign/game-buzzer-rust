@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use protocol::InboundMessageType;
+use protocol::IncomingMessage;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -39,7 +41,7 @@ async fn on_upgrade(websocket: WebSocket, state: Arc<RwLock<Game>>) {
     let (channel_send, channel_receive) = mpsc::unbounded_channel();
     let mut channel_receiver_stream = UnboundedReceiverStream::new(channel_receive);
 
-    // spawn a new task that will handle any incoming channel messages and immediately send them to the websocket sender
+    // spawn a new task that will listen to the channel and relay the messages to the websocket sender
     tokio::task::spawn(async move {
         while let Some(incoming_channel_message) = channel_receiver_stream.next().await {
             ws_send.send(incoming_channel_message).await
@@ -48,81 +50,82 @@ async fn on_upgrade(websocket: WebSocket, state: Arc<RwLock<Game>>) {
                 });
         }
     });
-
-    // explicitly handle the first message as a registration message 
+    
+    // explicitly handle the first message (which should be a registration message)
     let first_message = ws_receive.next().await.unwrap();
-    let first_message = first_message.unwrap();
-
-    // all messages should be text
-    assert!(first_message.is_text());
-
-    // get the text for the message
-    let text = first_message.to_str().unwrap();
-    let sections: Vec<&str> = text.split(".").collect();
-
-    if sections.len() != 5 {
-        println!("Received message with wrong number of sections (should be 5) {}", text);
+    let first_message_actual = first_message.unwrap();
+    if first_message_actual.is_close() {
         return;
     }
 
-    // the first section describes the type of the message
-    match sections[0] {
+    let json_result = serde_json::from_str::<IncomingMessage>(first_message_actual.to_str().unwrap());
+    if json_result.is_err() {
+        eprintln!("Incoming message was not valid JSON: {}", first_message_actual.to_str().unwrap());
+        return;
+    }
+    
+    let first_message_body = json_result.unwrap();
 
-        // register new user to team
-        "register" => {
-            let team = sections[1];
-            let user = sections[2];
-            
-            state.write().await.register_user_for_team(team, user, channel_send).await;
-        },
-        &_ => {}
-    };
+    // assert that first message must be of type Register
+    if first_message_body.message_type != InboundMessageType::Register {
+        eprintln!("First message received was not a registration message");
+        return;
+    }
 
-
-
+    // assert that the registration message must contain the team and user
+    if first_message_body.team.is_none() || first_message_body.user.is_none() {
+        eprintln!("Received registration message that was missing information");
+        return;
+    }
+    
+    // store the user's registration information
+    let team_unwrap = first_message_body.team.unwrap();
+    let user_unwrap = first_message_body.user.unwrap();
+    state.write().await.register_user_for_team(&team_unwrap.as_str(), &user_unwrap.as_str(), channel_send).await;
+    
+    // spawn a new task that will handle any future incoming messages for this client.
     tokio::task::spawn(async move {
+        // this is here to force tokio to persist first_message_body as part of the thread's closure
+        let team = team_unwrap.as_str();
+        let user = user_unwrap.as_str();
+
         // while there are some websocket messages to receive from this user, handle them
         while let Some(message) = ws_receive.next().await {
             let msg = message.unwrap();
 
-            // all messages should be text
-            assert!(msg.is_text());
+            // handle disconnect message
+            if msg.is_close() {
+                state.write().await.disconnect_user(team, user).await;
+                return;
+            }
 
-            // get the text for the message
-            let text = msg.to_str().unwrap();
-            let sections: Vec<&str> = text.split(".").collect();
-
-            if sections.len() != 5 {
-                println!("Received message with wrong number of sections (should be 5) {}", text);
+            // all non disconnect messages should be text
+            // ignore any that aren't
+            if !msg.is_text() {
                 continue;
             }
 
-            // the first section describes the type of the message
-            match sections[0] {
+            // parse the message json
+            let json_result = serde_json::from_str::<IncomingMessage>(msg.to_str().unwrap());
 
-                // register new user to team
-                "message" => {
-                    // let target_team = sections[1];
-                    // let message = sections[2];
+            if json_result.is_err() {
+                eprintln!("Incoming message was not valid JSON: {}", msg.to_str().unwrap());
+                eprintln!("Invalid message was received from: {}", user);
+            }
 
-                    // let teams = state.teams.read().await;
-                    // let maybe_team = teams.get(target_team);
-
-                    // match maybe_team {
-                    //     Some(value) => {
-                    //         println!("Sending message to team {}", target_team);
-                    //         for recipient in value {
-                    //             let send_item = Message::text(message);
-                    //             let send_result = recipient.1.send(send_item);
-                    //             send_result.unwrap();
-                    //         }
-                    //     },
-                    //     None => {
-                    //         println!("Attempted to send message to team that does not exist {}", target_team);
-                    //     }
-                    // }
+            let msg_body = json_result.unwrap();
+            match msg_body.message_type {
+                InboundMessageType::Register => {
+                    eprintln!("Received another registration attempt when already registered");
                 },
-                &_ => {}
+
+                InboundMessageType::Buzzer => {
+                    state.write().await.try_activate_buzzer(team, user).await;
+                },
+
+                _ => {
+                    
+                }
             }
         }
     });
@@ -132,8 +135,4 @@ pub struct State {
     pub buzzer_activated: RwLock<bool>,
     pub user_activated: Option<String>,
     pub teams: RwLock<HashMap<String, HashMap<String, mpsc::UnboundedSender<Message>>>>
-}
-
-pub struct Registration {
-    
 }

@@ -60,6 +60,10 @@ impl Game {
         self.message_all_users(message).await;
     }
 
+    pub async fn disconnect_user(&mut self, team: &str, user: &str) {
+        
+    }
+
     pub async fn try_activate_buzzer(&mut self, team: &str, user: &str) {
         let is_locked = self.buzzer_activated.try_lock();
 

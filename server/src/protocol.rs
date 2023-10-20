@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Deserialize, PartialEq, Eq)]
 pub enum InboundMessageType {
     Register,
     Buzzer,
@@ -7,41 +8,20 @@ pub enum InboundMessageType {
     Answer
 }
 
-impl InboundMessageType {
-    pub fn from(input: &str) -> InboundMessageType {
-        match input {
-            "register" => InboundMessageType::Register,
-            "buzzer" => InboundMessageType::Buzzer,
-            "select-question" => InboundMessageType::SelectQuestion,
-            "answer" => InboundMessageType::Answer,
-            &_ => InboundMessageType::Buzzer
-        }
-    }
-}
-
 #[derive(Serialize)]
 pub enum OutboundMessageType {
     NewUser,
     BuzzerReady,
-    BuzzerActivated
+    BuzzerActivated,
+    DisconnectedUser
 }
 
-impl OutboundMessageType {
-    pub fn from(input: &str) -> OutboundMessageType {
-        match input {
-            "new-user" => OutboundMessageType::NewUser,
-            "buzzer-ready" => OutboundMessageType::BuzzerReady,
-            "buzzer_activated" => OutboundMessageType::BuzzerActivated,
-            &_ => OutboundMessageType::BuzzerActivated
-        }
-    }
-}
-
+#[derive(Deserialize)]
 pub struct IncomingMessage {
     pub message_type: InboundMessageType,
-    pub team: String,
-    pub user: String,
-    pub body: String,
+    pub team: Option<String>,
+    pub user: Option<String>,
+    pub body: Option<String>
 }
 
 #[derive(Serialize)]
