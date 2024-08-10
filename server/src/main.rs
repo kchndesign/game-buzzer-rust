@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
-use admin_interface::AdminPostBody;
+use admin_interface::AdminRegistration;
 use gamestate::GameState;
 use gamestate::MultiplayerActorSink;
 use gamestate::MultiplayerGameManager;
@@ -26,23 +26,31 @@ async fn main() {
     let games: Arc<RwLock<HashMap<String, Arc<MultiplayerActorSink>>>> = Arc::new(RwLock::new(HashMap::new()));
     let games_filter = warp::any().map(move || games.clone());
 
-    let ws_entry_admin = warp::post()
-        .and(warp::body::json())
-        .and(warp::path("create"))
+    let ws_entry_admin = warp::path("create")
+        .and(warp::query::<HashMap<String, String>>())
         .and(games_filter.clone())
         .and(warp::ws())
-        .and_then(| body: AdminPostBody,  games: Arc<RwLock<HashMap<String, Arc<MultiplayerActorSink>>>>, upgrade: Ws | async move {
+        .and_then(| query: HashMap<String, String>,  games: Arc<RwLock<HashMap<String, Arc<MultiplayerActorSink>>>>, upgrade: Ws | async move {
+            if !query.contains_key("teams") {
+                return Err(warp::reject());
+            }
+
+            let body = AdminRegistration {
+                teams: serde_json::from_str(query.get("teams").unwrap().as_str()).unwrap()
+            };
+
             let mut games_dict = games.write().await;
-            let mut game_id: String;
+            let mut game_id: String = "debug".to_string();
             loop {
+                if !games_dict.contains_key(&game_id) { 
+                    break;
+                }
+
                 game_id = rand::thread_rng()
                     .sample_iter(&Alphanumeric)
                     .take(5)
                     .map(char::from)
                     .collect::<String>();
-                if games_dict.contains_key(&game_id) { 
-                    break;
-                }
             }
             let mut teams = HashMap::new();
             for team in body.teams {
@@ -53,9 +61,8 @@ async fn main() {
             let arc_game_actor = Arc::from(new_game_actor);
             let arc_game_actor_for_channels = arc_game_actor.clone();
             games_dict.insert(game_id.clone(), arc_game_actor);
-            Ok::<_, Infallible>(upgrade.on_upgrade(move| websocket| on_upgrade_admin(websocket, arc_game_actor_for_channels, game_id)))
+            Ok(upgrade.on_upgrade(move| websocket| on_upgrade_admin(websocket, arc_game_actor_for_channels, game_id)))
         });
-
 
     // Lay out routes, middleware and actions for each route
     let ws_entry_player = warp::path!("game" / String)
@@ -86,10 +93,16 @@ async fn on_upgrade_admin(websocket: WebSocket, state: Arc<MultiplayerActorSink>
     // spawn a new task that will listen to the channel and relay the messages to the websocket sender
     tokio::task::spawn(async move {
         while let Some(incoming_channel_message) = channel_receiver_stream.next().await {
-            ws_send.send(incoming_channel_message).await
-                .unwrap_or_else(| error | {
-                    eprintln!("Could not send websocket message from channel: {}", error);
-                });
+            let ws_send_result = ws_send.send(incoming_channel_message).await;
+            match ws_send_result {
+                Err(error) => {
+                    eprintln!("Could not send for websocket channel: {}, closing ws channel", error);
+                    let _ = ws_send.close().await;
+                    channel_receiver_stream.close();
+                    break;
+                },
+                Ok(_) => {}
+            }
         }
     });
 
@@ -139,10 +152,16 @@ async fn on_upgrade_player(websocket: WebSocket, state: Arc<MultiplayerActorSink
     // spawn a new task that will listen to the channel and relay the messages to the websocket sender
     tokio::task::spawn(async move {
         while let Some(incoming_channel_message) = channel_receiver_stream.next().await {
-            ws_send.send(incoming_channel_message).await
-                .unwrap_or_else(| error | {
-                    eprintln!("Could not send websocket message from channel: {}", error);
-                });
+            let ws_send_result = ws_send.send(incoming_channel_message).await;
+            match ws_send_result {
+                Err(error) => {
+                    eprintln!("Could not send for websocket channel: {}, closing ws channel", error);
+                    let _ = ws_send.close().await;
+                    channel_receiver_stream.close();
+                    break;
+                },
+                Ok(_) => {}
+            }
         }
     });
     
@@ -183,7 +202,11 @@ async fn on_upgrade_player(websocket: WebSocket, state: Arc<MultiplayerActorSink
                 continue;
             }
 
-            
+            let msg_text = msg.to_str().unwrap();
+            match msg_text {
+                "activate_buzzer" => state.handle_message(MultiplayerMessage::ActivateBuzzer { team: team.clone(), user_name: user_name.clone() }).await,
+                something_else => eprintln!("Received unrecognised input from player: {}", something_else)
+            }
         }
     });
 }

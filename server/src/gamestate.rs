@@ -24,6 +24,7 @@ impl GameState {
     }
 }
 
+#[derive(Debug)]
 pub enum MultiplayerMessage {
     RegisterUserForTeam {
         team: String,
@@ -77,6 +78,8 @@ impl MultiplayerGameManager {
 
         tokio::spawn(async move {
             while let Some(actor_message) = rx_stream.next().await {
+                dbg!("GameMessage:", &actor_message);
+
                 match actor_message {
                     MultiplayerMessage::RegisterUserForTeam { team, user_name, channel} => {
                         game_manager.register_user_for_team(team, user_name, channel).await;
@@ -89,8 +92,10 @@ impl MultiplayerGameManager {
                         game_manager.add_admin_user(channel).await,
                     MultiplayerMessage::ResetBuzzer {  } => 
                         game_manager.reset_buzzer().await,
-                    MultiplayerMessage::DiscardGame {} => 
+                    MultiplayerMessage::DiscardGame {} => {
+                        game_manager.discard_game().await;
                         break
+                    }
                 }
             }
         });
@@ -109,11 +114,19 @@ impl MultiplayerGameManager {
     async fn update_state_for_all_users(&self) {
         let state = self.state.read().await;
         let message_text = serde_json::to_string(state.deref()).unwrap();
-
+        dbg!("Sending for all users");
         // TODO: this is probably a bad idea
-        self.all_users.write().await.retain(|channel| {
-            let send_result = channel.send(Message::text(&message_text));
-            send_result.is_ok()
+        let mut users_to_send_to = self.all_users.write().await;
+        users_to_send_to.retain(|channel| {
+            if channel.is_closed() {
+                dbg!("channel is closed");
+                dbg!("channel is closed");
+                false
+            } else {
+                dbg!("channel is NOT closed");
+                let _ = channel.send(Message::text(&message_text));
+                true
+            }
         });
     }
 
@@ -154,7 +167,7 @@ impl MultiplayerGameManager {
 
             match maybe_team {
                 Some(value) => { 
-                    value.retain(|x| *x == user_name);
+                    value.retain(|x| *x != user_name);
                 },
                 None => {
                     println!("Could not find {} team for user {}", team, user_name);
@@ -170,40 +183,56 @@ impl MultiplayerGameManager {
     }
 
     pub async fn try_activate_buzzer(&mut self, team: String, user_name: String) {
-        let mut state = self.state.write().await;
-        let maybe_team = state.teams.get(&team);
+        {
+            let mut state = self.state.write().await;
+            let maybe_team = state.teams.get(&team);
 
-        match maybe_team {
-            Some(value) => { 
-                if !value.iter().any(|x| *x == user_name) {
-                    println!("Player {} does not exist in team {}", user_name, team);
-                    return;
+            match maybe_team {
+                Some(value) => { 
+                    if !value.iter().any(|x| *x == user_name) {
+                        println!("Player {} does not exist in team {}", user_name, team);
+                        return;
+                    }
+
+                    if state.buzzer_activated {
+                        println!("Player {} tried to activate buzzer but it was already activated", user_name);
+                        return;
+                    }
+
+                    state.buzzer_activated = true;
+                    state.team_activated = Some(team.to_string());
+                    state.user_activated = Some(user_name.to_string());
+                },
+                None => {
+                    println!("Could not find {} team for user {}", team, user_name);
                 }
-
-                if state.buzzer_activated {
-                    println!("Player {} tried to activate buzzer but it was already activated", user_name);
-                    return;
-                }
-
-                state.buzzer_activated = true;
-                state.team_activated = Some(team.to_string());
-                state.user_activated = Some(user_name.to_string());
-            },
-            None => {
-                println!("Could not find {} team for user {}", team, user_name);
             }
         }
+
+        // broadcast update
+        self.update_state_for_all_users().await;
     }
 
     pub async fn reset_buzzer(&mut self) {
-        let mut state = self.state.write().await;
-        state.buzzer_activated = false;
-        state.team_activated = None;
-        state.user_activated = None;
+        {
+            let mut state = self.state.write().await;
+            state.buzzer_activated = false;
+            state.team_activated = None;
+            state.user_activated = None;
+        }
+
+        // broadcast update
+        self.update_state_for_all_users().await;
     }
 
     pub async fn add_admin_user(&mut self, channel: mpsc::UnboundedSender<Message>) {
         self.all_users.write().await.push(channel);
+    }
+
+    pub async fn discard_game(&mut self) {
+        for channel in self.all_users.read().await.iter() {
+            channel.send(Message::close()).unwrap();
+        }
     }
 }
 

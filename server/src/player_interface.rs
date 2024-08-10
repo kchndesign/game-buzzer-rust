@@ -1,7 +1,3 @@
-pub enum PlayerMessage { 
-    Buzzer,
-}
-
 pub struct PlayerRegistrationMessage {
     pub team: String,
     pub user_name: String,
