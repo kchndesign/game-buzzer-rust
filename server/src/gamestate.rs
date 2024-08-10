@@ -38,7 +38,11 @@ pub enum MultiplayerMessage {
         team: String,
         user_name: String,
     },
-    DiscardGame {}
+    DiscardGame {},
+    AddAdminUser {
+        channel: UnboundedSender<Message>
+    },
+    ResetBuzzer {},
 }
 
 pub struct MultiplayerActorSink {
@@ -81,6 +85,10 @@ impl MultiplayerGameManager {
                         game_manager.disconnect_user(team, user_name).await,
                     MultiplayerMessage::ActivateBuzzer { team, user_name } => 
                         game_manager.try_activate_buzzer(team, user_name).await,
+                    MultiplayerMessage::AddAdminUser { channel } => 
+                        game_manager.add_admin_user(channel).await,
+                    MultiplayerMessage::ResetBuzzer {  } => 
+                        game_manager.reset_buzzer().await,
                     MultiplayerMessage::DiscardGame {} => 
                         break
                 }
@@ -192,6 +200,10 @@ impl MultiplayerGameManager {
         state.buzzer_activated = false;
         state.team_activated = None;
         state.user_activated = None;
+    }
+
+    pub async fn add_admin_user(&mut self, channel: mpsc::UnboundedSender<Message>) {
+        self.all_users.write().await.push(channel);
     }
 }
 
