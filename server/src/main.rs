@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use game2::MultiplayerActorSink;
-use game2::MultiplayerMessage;
+use gamestate::MultiplayerActorSink;
+use gamestate::MultiplayerMessage;
+use player_interface::PlayerRegistrationMessage;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use warp::filters::ws::Message;
 use warp::{Filter, filters::ws::WebSocket};
 use futures_util::{SinkExt, StreamExt};
-mod game2;
+mod gamestate;
+mod player_interface;
 
 #[tokio::main]
 async fn main() {
@@ -58,29 +60,16 @@ async fn on_upgrade_player(websocket: WebSocket, state: Arc<MultiplayerActorSink
         return;
     }
 
-    let json_result = serde_json::from_str::<IncomingMessage>(first_message_actual.to_str().unwrap());
-    if json_result.is_err() {
-        eprintln!("Incoming message was not valid JSON: {}", first_message_actual.to_str().unwrap());
-        return;
-    }
-    
-    let first_message_body = json_result.unwrap();
-
-    // assert that first message must be of type Register
-    if first_message_body.message_type != InboundMessageType::Register {
-        eprintln!("First message received was not a registration message");
-        return;
-    }
-
-    // assert that the registration message must contain the team and user
-    if first_message_body.team.is_none() || first_message_body.user.is_none() {
-        eprintln!("Received registration message that was missing information");
+    let maybe_registration_message = PlayerRegistrationMessage::new(first_message_actual.to_str().unwrap());
+    if maybe_registration_message.is_none() {
+        eprintln!("Player registration message was invalid");
         return;
     }
     
     // store the user's registration information
-    let team = first_message_body.team.unwrap();
-    let user_name = first_message_body.user.unwrap();
+    let registration_message = maybe_registration_message.unwrap();
+    let team = registration_message.team;
+    let user_name = registration_message.user_name;
     state.handle_message(MultiplayerMessage::RegisterUserForTeam { team: team.clone(), user_name: user_name.clone(), channel: channel_send }).await;
 
     // spawn a new task that will handle any future incoming messages for this client.
