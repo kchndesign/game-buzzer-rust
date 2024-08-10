@@ -1,39 +1,39 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use protocol::InboundMessageType;
-use protocol::IncomingMessage;
+use game2::MultiplayerActorSink;
+use game2::MultiplayerMessage;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use warp::filters::ws::Message;
 use warp::{Filter, filters::ws::WebSocket};
 use futures_util::{SinkExt, StreamExt};
-mod game;
-use crate::game::Game;
-mod protocol;
+mod game2;
 
 #[tokio::main]
 async fn main() {
-    // establish in memory state
-    let game = Arc::new(RwLock::new(Game::new()));
+    // in memory state
+    let games: HashMap<String, Arc<MultiplayerActorSink>> = HashMap::new();
 
     // Lay out routes, middleware and actions for each route
-    let routes = warp::path("echo")
+    let ws_entry_player = warp::path!("game" / String)
         // ws() is a filter that will handle the handshake for 
         // requests to this path
         .and(warp::ws())
         // Init a new closure with the upgrade object that 
         // is spit out by the ws() filter
-        .map(move | upgrade: warp::ws::Ws | {
-            let cloned_state = game.clone();
-            upgrade.on_upgrade(| websocket| on_upgrade(websocket, cloned_state))
+        .map(move | game_id: String, upgrade: warp::ws::Ws | {
+            let game = games.get(&game_id).unwrap().clone();
+            upgrade.on_upgrade(| websocket| on_upgrade_player(websocket, game))
         });
+
+    let routes = ws_entry_player;
 
     warp::serve(routes).run(([127, 0, 0, 1], 5000)).await;
 }
 
 // handle new connections
-async fn on_upgrade(websocket: WebSocket, state: Arc<RwLock<Game>>) {
+async fn on_upgrade_player(websocket: WebSocket, state: Arc<MultiplayerActorSink> ) {
     let (mut ws_send, mut ws_receive) = websocket.split();
 
     // create channel for this user
@@ -79,23 +79,19 @@ async fn on_upgrade(websocket: WebSocket, state: Arc<RwLock<Game>>) {
     }
     
     // store the user's registration information
-    let team_unwrap = first_message_body.team.unwrap();
-    let user_unwrap = first_message_body.user.unwrap();
-    state.write().await.register_user_for_team(&team_unwrap.as_str(), &user_unwrap.as_str(), channel_send).await;
-    
+    let team = first_message_body.team.unwrap();
+    let user_name = first_message_body.user.unwrap();
+    state.handle_message(MultiplayerMessage::RegisterUserForTeam { team: team.clone(), user_name: user_name.clone(), channel: channel_send }).await;
+
     // spawn a new task that will handle any future incoming messages for this client.
     tokio::task::spawn(async move {
-        // this is here to force tokio to persist first_message_body as part of the thread's closure
-        let team = team_unwrap.as_str();
-        let user = user_unwrap.as_str();
-
         // while there are some websocket messages to receive from this user, handle them
         while let Some(message) = ws_receive.next().await {
             let msg = message.unwrap();
 
             // handle disconnect message
             if msg.is_close() {
-                state.write().await.disconnect_user(team, user).await;
+                state.handle_message(MultiplayerMessage::DisconnectUser { team: team.clone(), user_name: user_name.clone()}).await;
                 return;
             }
 
@@ -105,28 +101,28 @@ async fn on_upgrade(websocket: WebSocket, state: Arc<RwLock<Game>>) {
                 continue;
             }
 
-            // parse the message json
-            let json_result = serde_json::from_str::<IncomingMessage>(msg.to_str().unwrap());
+            // // parse the message json
+            // let json_result = serde_json::from_str::<IncomingMessage>(msg.to_str().unwrap());
 
-            if json_result.is_err() {
-                eprintln!("Incoming message was not valid JSON: {}", msg.to_str().unwrap());
-                eprintln!("Invalid message was received from: {}", user);
-            }
+            // if json_result.is_err() {
+            //     eprintln!("Incoming message was not valid JSON: {}", msg.to_str().unwrap());
+            //     eprintln!("Invalid message was received from: {}", user_name.clone());
+            // }
 
-            let msg_body = json_result.unwrap();
-            match msg_body.message_type {
-                InboundMessageType::Register => {
-                    eprintln!("Received another registration attempt when already registered");
-                },
+            // let msg_body = json_result.unwrap();
+            // match msg_body.message_type {
+            //     InboundMessageType::Register => {
+            //         eprintln!("Received another registration attempt when already registered");
+            //     },
 
-                InboundMessageType::Buzzer => {
-                    state.write().await.try_activate_buzzer(team, user).await;
-                },
+            //     InboundMessageType::Buzzer => {
+            //     state.handle_message(MultiplayerMessage::ActivateBuzzer { team: team.clone(), user_name: user_name.clone()}).await;
+            //     },
 
-                _ => {
+            //     _ => {
                     
-                }
-            }
+            //     }
+            // }
         }
     });
 }
