@@ -1,0 +1,46 @@
+{
+    "name": "freespirits-app",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc && vite build",
+        "preview": "vite preview",
+        "build:lambda": "rm -rf dist-lambda && tsc -p tsconfig.lambda.json",
+        "tf:plan": "npm run build:lambda && cd terraform && terraform plan -out auto.tfplan && cd ..",
+        "tf:apply": "cd terraform && terraform apply auto.tfplan && cd .."
+    },
+    "dependencies": {
+        "@aws-sdk/credential-providers": "^3.309.0",
+        "@aws-sdk/lib-dynamodb": "^3.309.0",
+        "@emotion/react": "^11.10.6",
+        "@emotion/styled": "^11.10.6",
+        "@mui/icons-material": "^5.11.16",
+        "@mui/joy": "^5.0.0-alpha.71",
+        "@mui/x-date-pickers": "^6.0.2",
+        "@types/aws-lambda": "^8.10.119",
+        "amazon-cognito-identity-js": "^6.1.2",
+        "bootstrap": "^5.2.3",
+        "dayjs": "^1.11.7",
+        "intl-tel-input": "^18.1.3",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "react-router-dom": "^6.8.1",
+        "styled-components": "^5.3.9",
+        "uuid": "^9.0.0",
+        "vite-plugin-svgr": "^2.4.0"
+    },
+    "devDependencies": {
+        "@types/intl-tel-input": "^17.0.6",
+        "@types/node": "^18.15.9",
+        "@types/react": "^18.0.27",
+        "@types/react-dom": "^18.0.10",
+        "@types/styled-components": "^5.1.26",
+        "@types/uuid": "^9.0.1",
+        "@vitejs/plugin-react": "^3.1.0",
+        "rollup-plugin-visualizer": "^5.9.0",
+        "typescript": "^4.9.3",
+        "vite": "^4.1.0"
+    }
+}
