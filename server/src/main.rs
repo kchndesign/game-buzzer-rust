@@ -10,6 +10,7 @@ use player_interface::PlayerRegistrationMessage;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use warp::filters::ws::Message;
@@ -164,6 +165,14 @@ async fn on_upgrade_player(websocket: WebSocket, state: Arc<MultiplayerActorSink
             }
         }
     });
+
+    {
+        // instantly send a message to the player on upgrade to tell the player which teams are available to choose.
+        let (get_teams_sink, get_teams_listener) = oneshot::channel::<Vec<String>>();
+        state.handle_message(MultiplayerMessage::GetTeams { respond_to: get_teams_sink }).await;
+        let result = get_teams_listener.await.unwrap();
+        let _ = channel_send.send(Message::text(serde_json::to_string(&result).unwrap()));
+    }
     
     // explicitly handle the first message (which should be a registration message)
     let first_message = ws_receive.next().await.unwrap();

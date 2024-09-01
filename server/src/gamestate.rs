@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 use futures_util::StreamExt;
 use serde::Serialize;
-use tokio::sync::{mpsc::{self, UnboundedSender}, RwLock};
+use tokio::sync::{mpsc::{self, UnboundedSender}, oneshot, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use warp::filters::ws::Message;
 
@@ -44,6 +44,9 @@ pub enum MultiplayerMessage {
         channel: UnboundedSender<Message>
     },
     ResetBuzzer {},
+    GetTeams {
+        respond_to: oneshot::Sender<Vec<String>>
+    }
 }
 
 pub struct MultiplayerActorSink {
@@ -95,6 +98,10 @@ impl MultiplayerGameManager {
                     MultiplayerMessage::DiscardGame {} => {
                         game_manager.discard_game().await;
                         break
+                    },
+                    MultiplayerMessage::GetTeams { respond_to } => {
+                        let result = game_manager.get_teams().await;
+                        let _ = respond_to.send(result);
                     }
                 }
             }
@@ -233,6 +240,13 @@ impl MultiplayerGameManager {
         for channel in self.all_users.read().await.iter() {
             channel.send(Message::close()).unwrap();
         }
+    }
+
+    pub async fn get_teams(&self) -> Vec<String> {
+        let state = self.state.read().await;
+        let iterator: Vec<String> = state.teams.iter().map(|(key, _)| {key.clone()}).collect();
+
+        return iterator;
     }
 }
 
