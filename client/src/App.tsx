@@ -1,11 +1,18 @@
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import AdminRoute from './routes/AdminRoute';
 import PlayerRoute from './routes/PlayerRoute';
+import PlayerCodeInput from './routes/PlayerCodeInput';
 
 const router = createBrowserRouter([
-    // game code input page
+    // player input code page
     {
-        path: '/:code?',
+        path: '/',
+        element: <PlayerCodeInput />,
+    },
+
+    // player game page
+    {
+        path: '/:code',
         element: <PlayerRoute />,
     },
 
